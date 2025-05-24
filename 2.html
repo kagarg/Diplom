@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500&family=Orbitron:wght@500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary-color: #e74c3c;
+            --secondary-color: #3498db;
+            --gold: #f1c40f;
+            --danger: #e74c3c;
+            --success: #2ecc71;
+        }
+
+        .roboturnir-overlay {
+            font-family: 'Rajdhani', sans-serif;
+            display: flex;
+            justify-content: space-between;
+            background: linear-gradient(45deg, rgba(0,0,0,0.9), rgba(40,40,40,0.9));
+            color: white;
+            padding: 20px;
+            border: 3px solid var(--primary-color);
+            border-radius: 15px;
+            width: 1100px;
+            margin: 0 auto;
+            position: relative;
+            box-shadow: 0 0 20px rgba(231,76,60,0.3);
+        }
+
+        /* Анимированная полоска прогресса таймера */
+        .timer-progress {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 3px;
+            background: var(--secondary-color);
+            transition: width 1s linear;
+        }
+
+        .team {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 30%;
+            position: relative;
+            padding: 15px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        .team.leading {
+            background: linear-gradient(45deg, rgba(241,196,15,0.1), transparent);
+            box-shadow: 0 0 15px rgba(241,196,15,0.2);
+        }
+
+        .team-name {
+            font-size: 1.8em;
+            font-weight: bold;
+            margin-bottom: 10px;
+            text-align: center;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+            position: relative;
+        }
+
+        .team-logo {
+            width: 60px;
+            height: 60px;
+            margin-bottom: 10px;
+            object-fit: contain;
+        }
+
+        .team-score {
+            font-size: 3.5em;
+            color: var(--gold);
+            font-family: 'Orbitron', sans-serif;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+
+        .score-change {
+            position: absolute;
+            font-size: 0.6em;
+            opacity: 0;
+            animation: scorePop 0.8s ease-out;
+        }
+
+        @keyframes scorePop {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(-40px); opacity: 0; }
+        }
+
+        .center-info {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 40%;
+            position: relative;
+        }
+
+        .round {
+            font-size: 1.5em;
+            color: var(--secondary-color);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 5px;
+        }
+
+        .timer {
+            font-size: 3em;
+            font-family: 'Orbitron', sans-serif;
+            text-shadow: 0 0 10px currentColor;
+            position: relative;
+            padding: 10px 20px;
+            background: rgba(0,0,0,0.5);
+            border-radius: 8px;
+        }
+
+        .timer.red { color: var(--danger); }
+        .timer.green { color: var(--success); }
+
+        /* Анимация критического времени */
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+
+        .timer.critical {
+            animation: pulse 1s infinite;
+        }
+
+        /* Мини-статистика */
+        .stats-overlay {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 8px;
+            border-radius: 5px;
+            font-size: 0.9em;
+        }
+
+        @media (max-width: 768px) {
+            .roboturnir-overlay {
+                width: 95%;
+                flex-direction: column;
+            }
+            
+            .team {
+                width: 100%;
+                margin: 10px 0;
+            }
+            
+            .timer {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="roboturnir-overlay">
+        <div class="timer-progress" id="timerProgress"></div>
+        
+        <div class="team left" id="team1Container">
+            <img class="team-logo" id="team1Logo" src="" alt="">
+            <div class="team-name" id="team1">Команда 1</div>
+            <div class="team-score" id="score1">0</div>
+        </div>
+        
+        <div class="center-info">
+            <div class="round" id="round">РАУНД 1</div>
+            <div class="timer" id="timer">02:30</div>
+            <!-- <div class="stats-overlay">
+                Победы: <span id="wins1">0</span>-<span id="wins2">0</span>
+            </div> -->
+        </div>
+        
+        <div class="team right" id="team2Container">
+            <img class="team-logo" id="team2Logo" src="" alt="">
+            <div class="team-name" id="team2">Команда 2</div>
+            <div class="team-score" id="score2">0</div>
+        </div>
+    </div>
+
+    <script>
+        // WebSocket соединение
+        const socket = new WebSocket('https://grmvzdlx-3008.euw.devtunnels.ms'); // Замените на свой адрес
+
+        // Параметры таймера
+        let initialTime = 150;
+        let currentTime = initialTime;
+        let timerInterval;
+
+        // Инициализация WebSocket
+        socket.addEventListener('open', (event) => {
+            console.log('WebSocket connected');
+            startTimer();
+        });
+
+        socket.addEventListener('message', (event) => {
+            const data = JSON.parse(event.data);
+            updateInterface(data);
+        });
+
+        socket.addEventListener('close', (event) => {
+            console.log('Connection lost, reconnecting...');
+            setTimeout(() => location.reload(), 2000);
+        });
+
+        function updateInterface(data) {
+            // Обновление логотипов
+            document.getElementById('team1Logo').src = data.logo1 || '';
+            document.getElementById('team2Logo').src = data.logo2 || '';
+
+            // Анимация изменения счета
+            const score1 = document.getElementById('score1');
+            const score2 = document.getElementById('score2');
+            if(score1.textContent !== data.score1.toString()) {
+                animateScoreChange(score1, data.score1 - parseInt(score1.textContent));
+                score1.textContent = data.score1;
+            }
+            if(score2.textContent !== data.score2.toString()) {
+                animateScoreChange(score2, data.score2 - parseInt(score2.textContent));
+                score2.textContent = data.score2;
+            }
+
+            // Обновление остальных данных
+            document.getElementById('team1').textContent = data.team1;
+            document.getElementById('team2').textContent = data.team2;
+            document.getElementById('round').textContent = `РАУНД ${data.round}`;
+            document.getElementById('wins1').textContent = data.wins1;
+            document.getElementById('wins2').textContent = data.wins2;
+
+            // Индикатор лидера
+            document.getElementById('team1Container').classList.toggle('leading', data.score1 > data.score2);
+            document.getElementById('team2Container').classList.toggle('leading', data.score2 > data.score1);
+
+            // Обновление таймера
+            if(data.time) {
+                const [minutes, seconds] = data.time.split(':').map(Number);
+                currentTime = minutes * 60 + seconds;
+                updateTimerDisplay();
+            }
+        }
+
+        
+        function animateScoreChange(element, value) {
+            const change = document.createElement('div');
+            change.className = 'score-change';
+            change.textContent = `${value > 0 ? '+' : ''}${value}`;
+            change.style.color = value > 0 ? '#2ecc71' : '#e74c3c';
+            element.appendChild(change);
+            setTimeout(() => change.remove(), 800);
+        }
+
+        function startTimer() {
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                if(currentTime > 0) currentTime--;
+                updateTimerDisplay();
+            }, 1000);
+        }
+
+        function updateTimerDisplay() {
+            const minutes = Math.floor(currentTime / 60);
+            const seconds = currentTime % 60;
+            const formattedTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            const timer = document.getElementById('timer');
+            
+            timer.textContent = formattedTime;
+            timer.className = `timer ${currentTime <= 30 ? 'red critical' : 'green'}`;
+            
+            const progress = document.getElementById('timerProgress');
+            progress.style.width = `${(currentTime / initialTime) * 100}%`;
+        }
+    </script>
+</body>
+</html>
