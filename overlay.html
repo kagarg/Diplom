@@ -169,10 +169,7 @@
         
         <div class="center-info">
             <div class="round" id="round">РАУНД 1</div>
-            <div class="timer" id="timer">02:30</div>
-            <!-- <div class="stats-overlay">
-                Победы: <span id="wins1">0</span>-<span id="wins2">0</span>
-            </div> -->
+            <div class="timer" id="timer">01:30</div>
         </div>
         
         <div class="team right" id="team2Container">
@@ -181,30 +178,34 @@
             <div class="team-score" id="score2">0</div>
         </div>
     </div>
-
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script>
         // WebSocket соединение
-        const socket = new WebSocket('https://grmvzdlx-3008.euw.devtunnels.ms'); // Замените на свой адрес
+        const socket = io('wss://grmvzdlx-3008.euw.devtunnels.ms');
 
-        // Параметры таймера
-        let initialTime = 150;
-        let currentTime = initialTime;
-        let timerInterval;
-
-        // Инициализация WebSocket
-        socket.addEventListener('open', (event) => {
-            console.log('WebSocket connected');
-            startTimer();
+        // Обработчик подключения
+        socket.on('connect', () => {
+        console.log('WebSocket соединение установлено');
         });
 
-        socket.addEventListener('message', (event) => {
-            const data = JSON.parse(event.data);
-            updateInterface(data);
+        // Слушаем кастомное событие с сервера
+        socket.on('BACK-END: Overlay data sent.', (data) => {
+        updateInterface(data); // data уже парсится автоматически
+        console.log('Получили данные с сервера')
         });
 
-        socket.addEventListener('close', (event) => {
-            console.log('Connection lost, reconnecting...');
-            setTimeout(() => location.reload(), 2000);
+        // Обработчик ошибок
+        socket.on('error', (error) => {
+        console.error('WebSocket Error:', error);
+        });
+
+        // Обработчик закрытия
+        socket.on('disconnect', (reason) => {
+        console.log('Соединение закрыто:', reason);
+        if (reason === 'transport close') {
+            console.log('Переподключение...');
+            socket.connect(); // Автоматическое переподключение
+        }
         });
 
         function updateInterface(data) {
@@ -228,21 +229,22 @@
             document.getElementById('team1').textContent = data.team1;
             document.getElementById('team2').textContent = data.team2;
             document.getElementById('round').textContent = `РАУНД ${data.round}`;
-            document.getElementById('wins1').textContent = data.wins1;
-            document.getElementById('wins2').textContent = data.wins2;
+
 
             // Индикатор лидера
             document.getElementById('team1Container').classList.toggle('leading', data.score1 > data.score2);
             document.getElementById('team2Container').classList.toggle('leading', data.score2 > data.score1);
 
-            // Обновление таймера
+            // Обновление таймера с сервера
             if(data.time) {
-                const [minutes, seconds] = data.time.split(':').map(Number);
-                currentTime = minutes * 60 + seconds;
-                updateTimerDisplay();
+                // Парсим время в формате ЧЧ:ММ:СС
+                const [hours, minutes, seconds] = data.time.split(':').map(Number);
+                const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+                updateTimerDisplay(totalSeconds);
             }
-        }
-
+    }
+        
+            
         
         function animateScoreChange(element, value) {
             const change = document.createElement('div');
@@ -253,25 +255,29 @@
             setTimeout(() => change.remove(), 800);
         }
 
-        function startTimer() {
-            clearInterval(timerInterval);
-            timerInterval = setInterval(() => {
-                if(currentTime > 0) currentTime--;
-                updateTimerDisplay();
-            }, 1000);
-        }
 
-        function updateTimerDisplay() {
-            const minutes = Math.floor(currentTime / 60);
-            const seconds = currentTime % 60;
-            const formattedTime = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+        function updateTimerDisplay(totalSeconds) {
+            const hours = Math.floor(totalSeconds / 3600);
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            
+            const formattedTime = 
+                `${hours.toString().padStart(2, '0')}:` +
+                `${minutes.toString().padStart(2, '0')}:` +
+                `${seconds.toString().padStart(2, '0')}`;
+                
             const timer = document.getElementById('timer');
-            
             timer.textContent = formattedTime;
-            timer.className = `timer ${currentTime <= 30 ? 'red critical' : 'green'}`;
             
+            // Обновление стилей (пример логики)
+            timer.className = `timer ${totalSeconds <= 30 ? 'red critical' : 'green'}`;
+            
+            // Убрана анимация прогресс-бара, так как она требует знания общего времени
+            // Если нужно оставить прогресс-бар - нужно получать общее время с сервера
             const progress = document.getElementById('timerProgress');
-            progress.style.width = `${(currentTime / initialTime) * 100}%`;
+            if(data.initialTime) { // Если сервер присылает общее время
+                progress.style.width = `${(totalSeconds / data.initialTime) * 100}%`;
+            }
         }
     </script>
 </body>
