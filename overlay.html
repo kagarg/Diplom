@@ -237,9 +237,12 @@
 
             // Обновление таймера с сервера
             if(data.time) {
-                // Парсим время в формате ЧЧ:ММ:СС
-                const [hours, minutes, seconds] = data.time.split(':').map(Number);
-                const totalSeconds = hours * 3600 + minutes * 60 + seconds;
+                // Парсим ISO-дату и вычисляем оставшееся время
+                const endTime = new Date(data.time);
+                const currentTime = new Date();
+                const diffSeconds = Math.floor((endTime - currentTime) / 1000);
+                const totalSeconds = Math.max(0, diffSeconds); // Не даем уйти в отрицательные значения
+                
                 updateTimerDisplay(totalSeconds);
             }
     }
@@ -269,15 +272,12 @@
             const timer = document.getElementById('timer');
             timer.textContent = formattedTime;
             
-            // Обновление стилей (пример логики)
+            // Обновление стилей таймера
             timer.className = `timer ${totalSeconds <= 30 ? 'red critical' : 'green'}`;
             
-            // Убрана анимация прогресс-бара, так как она требует знания общего времени
-            // Если нужно оставить прогресс-бар - нужно получать общее время с сервера
+            // Прогресс-бар (требует доп. данных от сервера)
             const progress = document.getElementById('timerProgress');
-            if(data.initialTime) { // Если сервер присылает общее время
-                progress.style.width = `${(totalSeconds / data.initialTime) * 100}%`;
-            }
+            // progress.style.width = ... // Раскомментировать, если сервер будет присылать общее время
         }
     </script>
 </body>
