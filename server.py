@@ -2,11 +2,12 @@ from fastapi import FastAPI, status
 from fastapi.responses import FileResponse
 import os
 import asyncio
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 import socketio
 from socketio import AsyncClient
 
+# ----------------------- Настройки приложения -----------------------
 app = FastAPI(
     title="Roboturnir Overlay API",
     description="API для управления оверлеем трансляции робототехнических соревнований",
@@ -14,6 +15,7 @@ app = FastAPI(
     contact={"name": "Поддержка", "email": "support@roboturnir.com"},
     license_info={"name": "NSTU"},
 )
+
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 socket_app = socketio.ASGIApp(sio, app)
 
@@ -21,16 +23,22 @@ EXTERNAL_WS_URL = "wss://grmvzdlx-3008.euw.devtunnels.ms"
 OVERLAY_FILE = "overlay.html"
 external_task = None
 
-# Хранилище состояния секундомера
-timer_state = {
-    "start_time": None,
-    "paused": False,
-    "pause_time": None,
-    "accumulated_pause": timedelta(seconds=0),
-    "task": None,
-    "base_data": {}
-}
+# ----------------------- Класс состояния таймера -----------------------
+class TimerState:
+    def __init__(self):
+        self.start_time : Optional[datetime] = None
+        self.paused:bool = False
+        self.pause_time : Optional[datetime]= None
+        self.accumulated_pause:timedelta = timedelta(seconds=0)
+        self.task:Optional[asyncio.Task] = None
+        self.base_data: dict = {}
 
+    def reset(self):
+        self.__init__()
+
+timer_state = TimerState()
+
+# ----------------------- Обработка входных данных -----------------------
 def process_overlay_data(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "team1": raw_data.get("team1", "Команда 1"),
@@ -43,36 +51,39 @@ def process_overlay_data(raw_data: Dict[str, Any]) -> Dict[str, Any]:
         "time": raw_data.get("time")  # используется только при инициализации
     }
 
+# ----------------------- Фоновый секундомер -----------------------
 async def start_stopwatch_loop():
     while True:
-        if timer_state["start_time"] and not timer_state["paused"]:
+        if timer_state.start_time and not timer_state.paused:
             now = datetime.now(timezone.utc)
-            elapsed = now - timer_state["start_time"] - timer_state["accumulated_pause"]
+            elapsed = now - timer_state.start_time - timer_state.accumulated_pause
             elapsed_seconds = max(0, int(elapsed.total_seconds()))
-
-            # Подготовка данных
-            data = timer_state["base_data"].copy()
-            # Отправляем оставшееся время в формате ISO конца
-            data["time"] = (datetime.now(timezone.utc) + timedelta(seconds=elapsed_seconds)).isoformat()
+            data = timer_state.base_data.copy()
+            data["time"] = (now + timedelta(seconds=elapsed_seconds)).isoformat()
             await sio.emit("overlay_update", data)
         await asyncio.sleep(1)
 
+# ----------------------- Обработка команд таймера -----------------------
 async def handle_timer_control(raw_data: Dict[str, Any]):
     control = raw_data.get("timer_control")
     now = datetime.now(timezone.utc)
 
-    if control == "pause" and not timer_state["paused"]:
-        timer_state["paused"] = True
-        timer_state["pause_time"] = now
+    if control == "pause" and not timer_state.paused:
+        timer_state.paused = True
+        timer_state.pause_time = now
         print("[timer] Секундомер приостановлен")
 
-    elif control == "resume" and timer_state["paused"]:
-        pause_duration = now - timer_state["pause_time"]
-        timer_state["accumulated_pause"] += pause_duration
-        timer_state["paused"] = False
-        timer_state["pause_time"] = None
+    elif control == "resume" and timer_state.paused:
+        if timer_state.pause_time is not None:
+            pause_duration = now - timer_state.pause_time
+            timer_state.accumulated_pause += pause_duration
+        else:
+            pause_duration = timedelta(0)  # или просто пропустить
+        timer_state.paused = False
+        timer_state.pause_time = None
         print("[timer] Секундомер возобновлён")
 
+# ----------------------- Прокси между внешним сервером и клиентами -----------------------
 async def forward_external_to_clients():
     sio_client = AsyncClient(reconnection=True)
 
@@ -82,11 +93,11 @@ async def forward_external_to_clients():
         if "time" in data:
             try:
                 start_time = datetime.fromisoformat(data["time"].replace("Z", "+00:00"))
-                timer_state["start_time"] = start_time
-                timer_state["accumulated_pause"] = timedelta(seconds=0)
-                timer_state["paused"] = False
-                timer_state["pause_time"] = None
-                timer_state["base_data"] = process_overlay_data(data)
+                timer_state.start_time = start_time
+                timer_state.accumulated_pause = timedelta(seconds=0)
+                timer_state.paused = False
+                timer_state.pause_time = None
+                timer_state.base_data = process_overlay_data(data)
                 print(f"[timer] Секундомер стартовал от {start_time.isoformat()}")
             except Exception as e:
                 print("[timer] Ошибка при парсинге времени:", e)
@@ -107,8 +118,8 @@ async def forward_external_to_clients():
     async def disconnect():
         print("[proxy] Отключение от внешнего сервера")
 
-    if not timer_state["task"]:
-        timer_state["task"] = asyncio.create_task(start_stopwatch_loop())
+    if not timer_state.task:
+        timer_state.task = asyncio.create_task(start_stopwatch_loop())
 
     while True:
         try:
@@ -123,22 +134,23 @@ async def forward_external_to_clients():
             except:
                 pass
 
+# ----------------------- WebSocket события клиента -----------------------
 @sio.event
 async def connect(sid, environ):
-    """
-    WebSocket подключение: 
-    - Инициирует подключение к внешнему серверу
-    - Запускает фоновую задачу синхронизации
-    """
     print(f"[sio] Клиент подключен: {sid}")
     global external_task
     if not external_task:
         external_task = asyncio.create_task(forward_external_to_clients())
 
+    # >>> Пункт 7: отправка текущего состояния новому клиенту <<<
+    if timer_state.base_data:
+        await sio.emit("overlay_update", timer_state.base_data, to=sid)
+
 @sio.event
 async def disconnect(sid):
     print(f"[sio] Клиент отключен: {sid}")
 
+# ----------------------- HTTP маршрут -----------------------
 @app.get(
     "/overlay",
     summary="Получить HTML-оверлей",
@@ -155,6 +167,7 @@ async def get_overlay():
         return {"error": "Overlay file not found"}, 404
     return FileResponse(OVERLAY_FILE)
 
+# ----------------------- Точка входа -----------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(socket_app, host="127.0.0.1", port=8000)
