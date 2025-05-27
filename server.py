@@ -1,14 +1,19 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, status
 from fastapi.responses import FileResponse
 import os
 import asyncio
-import json
 from typing import Dict, Any
 from datetime import datetime, timedelta, timezone
 import socketio
 from socketio import AsyncClient
 
-app = FastAPI()
+app = FastAPI(
+    title="Roboturnir Overlay API",
+    description="API для управления оверлеем трансляции робототехнических соревнований",
+    version="1.0.0",
+    contact={"name": "Поддержка", "email": "support@roboturnir.com"},
+    license_info={"name": "NSTU"},
+)
 sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins="*")
 socket_app = socketio.ASGIApp(sio, app)
 
@@ -120,6 +125,11 @@ async def forward_external_to_clients():
 
 @sio.event
 async def connect(sid, environ):
+    """
+    WebSocket подключение: 
+    - Инициирует подключение к внешнему серверу
+    - Запускает фоновую задачу синхронизации
+    """
     print(f"[sio] Клиент подключен: {sid}")
     global external_task
     if not external_task:
@@ -129,7 +139,17 @@ async def connect(sid, environ):
 async def disconnect(sid):
     print(f"[sio] Клиент отключен: {sid}")
 
-@app.get("/overlay")
+@app.get(
+    "/overlay",
+    summary="Получить HTML-оверлей",
+    description="Возвращает готовый HTML-файл с интерактивным оверлеем для OBS",
+    response_description="HTML-страница оверлея",
+    tags=["Основные элементы"],
+    responses={
+        200: {"content": {"text/html": {}}},
+        404: {"description": "Файл оверлея не найден"}
+    }
+)
 async def get_overlay():
     if not os.path.exists(OVERLAY_FILE):
         return {"error": "Overlay file not found"}, 404
