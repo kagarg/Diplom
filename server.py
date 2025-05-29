@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Body
 from fastapi.responses import FileResponse
 import os
 import asyncio
@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 import socketio
 from socketio import AsyncClient
-
+from pydantic import BaseModel
 # ----------------------- Настройки приложения -----------------------
 app = FastAPI(
     title="Roboturnir Overlay API",
@@ -22,6 +22,10 @@ socket_app = socketio.ASGIApp(sio, app)
 EXTERNAL_WS_URL = "wss://grmvzdlx-3008.euw.devtunnels.ms"
 OVERLAY_FILE = "overlay.html"
 external_task = None
+# ----------------------- Модели данных -----------------------
+class MessageRequest(BaseModel):
+    text: str
+    duration: Optional[int] = 5  # по умолчанию 5 секунд
 
 # ----------------------- Состояние таймера -----------------------
 class TimerState:
@@ -124,6 +128,7 @@ async def forward_external_to_clients():
     sio_client.on("BUTTONS: Fight start.", handle_fight_start)
     sio_client.on("FRONT-END: Fight pause.", handle_fight_pause)
     sio_client.on("BACK-END: Fight resume sent.", handle_fight_resume)
+    
 
     @sio_client.event
     async def connect():
@@ -172,6 +177,14 @@ async def disconnect(sid):
         404: {"description": "Файл оверлея не найден"}
     }
 )
+@app.post("/api/show_message", tags=["Пользовательский текст"])
+async def show_custom_message(message: MessageRequest):
+    await sio.emit("custom_message", {
+        "text": message.text,
+        "duration": message.duration
+    })
+    return {"status": "ok", "sent": message.model_dump()}
+
 async def get_overlay():
     if not os.path.exists(OVERLAY_FILE):
         return {"error": "Overlay file not found"}, 404

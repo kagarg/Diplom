@@ -117,6 +117,29 @@
 
         .timer.red { color: var(--danger); }
         .timer.green { color: var(--success); }
+        .custom-message {
+            position: fixed;
+            top: 10%;
+            left: 50%;
+            transform: translateX(-50%);
+            background-color: rgba(255,255,255,0.1);
+            color: #f1c40f;
+            font-size: 2em;
+            padding: 10px 20px;
+            border-radius: 10px;
+            font-family: 'Rajdhani', sans-serif;
+            box-shadow: 0 0 20px #f1c40f;
+            z-index: 9999;
+            text-align: center;
+            animation: fadeIn 0.5s ease-in-out;
+        }
+
+        /* Анимация появления кастомного сообщения */
+
+        @keyframes fadeIn {
+            0% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+            100% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
 
         /* Анимация критического времени */
         @keyframes pulse {
@@ -178,21 +201,28 @@
             <div class="team-score" id="score2">0</div>
         </div>
     </div>
+    <div id="customMessage" class="custom-message" style="display:none;"></div>
+
     <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
     <script>
         // WebSocket соединение
         const socket = io("http://127.0.0.1:8000");
+        
 
         // Обработчик подключения
         socket.on('connect', () => {
         console.log('соединение установлено');
         });
+        socket.on("custom_message", (data) => { // Обработка кастомного сообщения
+            const el = document.getElementById("customMessage");
+            el.textContent = data.text;
+            el.style.display = "block";
 
-        // Слушаем кастомное событие с сервера
-        // socket.on('BACK-END: Overlay data sent.', (data) => {
-        // updateInterface(data); 
-        // console.log('Получили данные с сервера')
-        // });
+            setTimeout(() => {
+                el.style.display = "none";
+            }, (data.duration || 5) * 1000);
+        });
+
         socket.on("overlay_update", (data) => {
             updateInterface(data);
             console.log('Получены данные:', data);
