@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body,HTTPException
 from fastapi.responses import FileResponse
 import os
 import asyncio
@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import socketio
 from socketio import AsyncClient
 from pydantic import BaseModel
+
 # ----------------------- Настройки приложения -----------------------
 app = FastAPI(
     title="Roboturnir Overlay API",
@@ -54,38 +55,45 @@ def process_overlay_data(raw_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 # ----------------------- Таймер -----------------------
-async def run_timer(seconds: int, base_data: dict):
-    timer_state.paused = False
-    start_time = datetime.now(timezone.utc)
-    end_time = start_time + timedelta(seconds=seconds)
+async def run_timer(seconds: int):
+    try:
+        timer_state.paused = False
+        start_time = datetime.now(timezone.utc)
+        end_time = start_time + timedelta(seconds=seconds)
 
-    while True:
-        if timer_state.paused:
-            timer_state.remaining_seconds = max(0, int((end_time - datetime.now(timezone.utc)).total_seconds()))
-            print(f"[pause] Таймер приостановлен. Осталось: {timer_state.remaining_seconds} сек.")
-            break
+        while True:
+            if timer_state.paused:
+                timer_state.remaining_seconds = max(0, int((end_time - datetime.now(timezone.utc)).total_seconds()))
+                print(f"[pause] Таймер приостановлен. Осталось: {timer_state.remaining_seconds} сек.")
+                break
 
-        now = datetime.now(timezone.utc)
-        remaining = (end_time - now).total_seconds()
-        if remaining <= 0:
-            base_data["time"] = now.isoformat()
-            await sio.emit("overlay_update", base_data)
-            break
+            now = datetime.now(timezone.utc)
+            remaining = int((end_time - now).total_seconds())
 
-        base_data["time"] = (now + timedelta(seconds=remaining)).isoformat()
-        await sio.emit("overlay_update", base_data)
-        await asyncio.sleep(1)
+            if remaining <= 0:
+                timer_state.base_data["remaining"] = 0
+                await sio.emit("overlay_update", timer_state.base_data)
+                break
 
-async def start_phase_timer(phase: str, base_data: dict):
+            timer_state.base_data["remaining"] = remaining
+            await sio.emit("overlay_update", timer_state.base_data)
+            await asyncio.sleep(1)
+    except Exception as e:
+        print(f"[timer] Ошибка в run_timer: {e}")
+
+async def start_phase_timer(phase: str):
+    if not timer_state.base_data:
+        print("[timer] Ошибка: base_data не установлен — данные о командах не получены.")
+        return
     if phase == "prepare":
         print("[timer] Старт подготовки: 3 минуты")
-        await run_timer(180, base_data)
+        await run_timer(180)
 
     elif phase == "fight":
         print("[timer] Отсчёт до боя: 3 секунды")
-        await run_timer(3, base_data)
+        await run_timer(3)
         print("[timer] Старт боя: 3 минуты")
-        timer_state.timer_task = asyncio.create_task(run_timer(180, base_data))
+        timer_state.timer_task = asyncio.create_task(run_timer(180))
 
 # ----------------------- Прокси -----------------------
 async def forward_external_to_clients():
@@ -93,40 +101,46 @@ async def forward_external_to_clients():
 
     async def handle_overlay_data(data):
         processed = process_overlay_data(data)
+        processed.pop("time", None)
         timer_state.base_data = processed
         await sio.emit("overlay_update", processed)
 
+    async def safe_start_phase_timer(phase: str):
+        try:
+            await start_phase_timer(phase)
+        except Exception as e:
+            print(f"[error] Ошибка при запуске таймера для фазы '{phase}': {e}")
+
     async def handle_preparing_start(data):
-        print("[event] BUTTONS: Preparing start sent.")
-        timer_state.base_data = process_overlay_data(data)
-        asyncio.create_task(start_phase_timer("prepare", timer_state.base_data.copy()))
+        print("[event] Preparing start sent.")
+        asyncio.create_task(safe_start_phase_timer("prepare"))
 
     async def handle_fight_start(data):
         print("[event] BUTTONS: Fight start.")
-        timer_state.base_data = process_overlay_data(data)
-        asyncio.create_task(start_phase_timer("fight", timer_state.base_data.copy()))
+        asyncio.create_task(safe_start_phase_timer("fight"))
 
-    async def handle_fight_pause(data):
-        print("[event] FRONT-END: Fight pause.")
+    async def handle_fight_pause():
+        print("[event] Fight pause.")
         if timer_state.timer_task:
             timer_state.paused = True
-            await asyncio.sleep(0.1)  # Дать циклу run_timer выйти
-            timer_state.timer_task.cancel()
+            await sio.emit("pause")
+            await timer_state.timer_task
             timer_state.timer_task = None
 
-    async def handle_fight_resume(data):
-        print("[event] BACK-END: Fight resume sent.")
-        if timer_state.paused and timer_state.remaining_seconds:
+    async def handle_fight_resume():
+        print("[event] Fight resume sent.")
+        if timer_state.paused and timer_state.remaining_seconds is not None:
+            await sio.emit("resume", {"remaining": timer_state.remaining_seconds})
             timer_state.paused = False
             timer_state.timer_task = asyncio.create_task(
-                run_timer(timer_state.remaining_seconds, timer_state.base_data.copy())
+                run_timer(timer_state.remaining_seconds)
             )
             timer_state.remaining_seconds = None
 
     sio_client.on("BACK-END: Overlay data sent.", handle_overlay_data)
-    sio_client.on("BUTTONS: Preparing start sent.", handle_preparing_start)
-    sio_client.on("BUTTONS: Fight start.", handle_fight_start)
-    sio_client.on("FRONT-END: Fight pause.", handle_fight_pause)
+    sio_client.on("BACK-END: Preparing start sent.", handle_preparing_start)
+    sio_client.on("BACK-END: Fight start sent.", handle_fight_start)
+    sio_client.on("BACK-END: Fight pause sent.", handle_fight_pause)
     sio_client.on("BACK-END: Fight resume sent.", handle_fight_resume)
     
 
@@ -142,6 +156,7 @@ async def forward_external_to_clients():
         try:
             print("[proxy] Подключение к внешнему серверу...")
             await sio_client.connect(EXTERNAL_WS_URL, transports=["websocket"], socketio_path="/socket.io")
+            print(f"[proxy] ✅ Установлено соединение с {EXTERNAL_WS_URL}")
             await sio_client.wait()
         except Exception as e:
             print(f"[proxy] Ошибка: {e}. Повтор через 5 секунд...")
@@ -177,6 +192,11 @@ async def disconnect(sid):
         404: {"description": "Файл оверлея не найден"}
     }
 )
+async def get_overlay():
+    if not os.path.exists(OVERLAY_FILE):
+        raise HTTPException(status_code=404, detail="Overlay file not found")
+    return FileResponse(OVERLAY_FILE)
+
 @app.post("/api/show_message", tags=["Пользовательский текст"])
 async def show_custom_message(message: MessageRequest):
     await sio.emit("custom_message", {
@@ -185,10 +205,7 @@ async def show_custom_message(message: MessageRequest):
     })
     return {"status": "ok", "sent": message.model_dump()}
 
-async def get_overlay():
-    if not os.path.exists(OVERLAY_FILE):
-        return {"error": "Overlay file not found"}, 404
-    return FileResponse(OVERLAY_FILE)
+
 
 # ----------------------- Точка входа -----------------------
 if __name__ == "__main__":

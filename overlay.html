@@ -26,16 +26,6 @@
             box-shadow: 0 0 20px rgba(231,76,60,0.3);
         }
 
-        /* Анимированная полоска прогресса таймера */
-        .timer-progress {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            height: 3px;
-            background: var(--secondary-color);
-            transition: width 1s linear;
-        }
-
         .team {
             display: flex;
             flex-direction: column;
@@ -134,7 +124,7 @@
             animation: fadeIn 0.5s ease-in-out;
         }
 
-        /* Анимация появления кастомного сообщения */
+        /* Анимация появления API сообщения */
 
         @keyframes fadeIn {
             0% { opacity: 0; transform: translateX(-50%) translateY(-20px); }
@@ -150,17 +140,6 @@
 
         .timer.critical {
             animation: pulse 1s infinite;
-        }
-
-        /* Мини-статистика */
-        .stats-overlay {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: rgba(0,0,0,0.7);
-            padding: 8px;
-            border-radius: 5px;
-            font-size: 0.9em;
         }
 
         @media (max-width: 768px) {
@@ -193,6 +172,9 @@
         <div class="center-info">
             <div class="round" id="round">РАУНД 1</div>
             <div class="timer" id="timer">01:30</div>
+            <div id="pauseOverlay" class="timer" style="display: none; font-size: 3em; color: var(--secondary-color);">
+                ПАУЗА
+            </div>
         </div>
         
         <div class="team right" id="team2Container">
@@ -207,13 +189,30 @@
     <script>
         // WebSocket соединение
         const socket = io("http://127.0.0.1:8000");
-        
+        let localTimerInterval = null;
+        let remainingTime = null;
+
+        function startLocalTimer(seconds) {
+            clearInterval(localTimerInterval);
+            remainingTime = seconds;
+            updateTimerDisplay(remainingTime);
+
+            localTimerInterval = setInterval(() => {
+                remainingTime--;
+                if (remainingTime <= 0) {
+                    clearInterval(localTimerInterval);
+                    remainingTime = 0;
+                }
+                updateTimerDisplay(remainingTime);
+            }, 1000);
+        }
+
 
         // Обработчик подключения
         socket.on('connect', () => {
         console.log('соединение установлено');
         });
-        socket.on("custom_message", (data) => { // Обработка кастомного сообщения
+        socket.on("custom_message", (data) => { // Обработка API сообщения
             const el = document.getElementById("customMessage");
             el.textContent = data.text;
             el.style.display = "block";
@@ -269,20 +268,17 @@
             document.getElementById('team1Container').classList.toggle('leading', data.score1 > data.score2);
             document.getElementById('team2Container').classList.toggle('leading', data.score2 > data.score1);
 
-            // Обновление таймера с сервера
-            if(data.time) {
-                // Парсим ISO-дату и вычисляем оставшееся время
-                const endTime = new Date(data.time);
-                const currentTime = new Date();
-                const diffSeconds = Math.floor((endTime - currentTime) / 1000);
-                const totalSeconds = Math.max(0, diffSeconds); // Не даем уйти в отрицательные значения
-                
-                updateTimerDisplay(totalSeconds);
+        
+            if (typeof data.remaining === "number") {
+                // Скрываем «ПАУЗА», если он был показан
+                document.getElementById('pauseOverlay').style.display = 'none';
+                // Показываем цифровой таймер
+                document.getElementById('timer').style.display = 'block';
+                // Стартуем локальный интервал
+                startLocalTimer(data.remaining);
             }
-    }
-        
-            
-        
+        }
+    
         function animateScoreChange(element, value) {
             const change = document.createElement('div');
             change.className = 'score-change';
@@ -291,7 +287,6 @@
             element.appendChild(change);
             setTimeout(() => change.remove(), 800);
         }
-
 
         function updateTimerDisplay(totalSeconds) {
             const hours = Math.floor(totalSeconds / 3600);
@@ -311,6 +306,30 @@
             
            
         }
+
+        //обработчик паузы
+        socket.on("pause", () => {
+            console.log("⏸ Событие PAUSE получено");
+            // Стираем цифровой таймер
+            clearInterval(localTimerInterval);
+            localTimerInterval = null;
+            // Прячем цифровой таймер и показываем надпись «ПАУЗА»
+            document.getElementById('timer').style.display = 'none';
+            document.getElementById('pauseOverlay').style.display = 'block';
+        });
+
+        //обработчик возобновления
+        socket.on("resume", (data) => {
+            console.log("▶️ Событие RESUME получено", data);
+            if (typeof data.remaining === "number") {
+                // Прячем «ПАУЗА»
+                document.getElementById('pauseOverlay').style.display = 'none';
+                // Показываем цифровой таймер и запускаем отсчёт заново
+                document.getElementById('timer').style.display = 'block';
+                startLocalTimer(data.remaining);
+            }
+        });
+
     </script>
 </body>
 </html>
